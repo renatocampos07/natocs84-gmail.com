@@ -1,0 +1,244 @@
+import gradio as gr
+import pandas as pd
+import os
+import tempfile  # Importação obrigatória do módulo
+
+from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+
+
+
+def handle_excel(file):
+    excel_file = pd.ExcelFile(file)
+    sheet_names = excel_file.sheet_names
+
+    invoices_cols = {
+        "C100": "12",
+        "C180": "8", 
+        "D100": "15",
+        "F100": "6"
+    }
+
+    supplier_cols = {
+        "C100": "04",
+        "C180": None,
+        "D100": "04", 
+        "F100": "03"
+    }
+
+    all_data = []
+
+    for sheet in sheet_names:
+        if sheet in invoices_cols:
+        
+            df = pd.read_excel(file, sheet_name=sheet)
+            
+        
+            sheet_data = {
+                'sheet_name': sheet,
+                'id': df.iloc[:, 0], 
+                'value': df.iloc[:, int(invoices_cols[sheet])] 
+            }
+            
+        
+            if supplier_cols[sheet] is not None:
+                sheet_data['fornecedor'] = df.iloc[:, int(supplier_cols[sheet])]
+            else:
+                sheet_data['fornecedor'] = None
+                
+        
+            sheet_df = pd.DataFrame(sheet_data)
+            all_data.append(sheet_df)
+
+    return pd.concat(all_data, ignore_index=True)
+
+def generate_response(question, file):
+    df = handle_excel(file)
+    llm = ChatOpenAI(
+        base_url="http://127.0.0.1:1234/v1/",
+        temperature=0,
+        api_key="not-needed"
+    )
+
+    output_parser = StrOutputParser()
+
+    prompt = """ 
+    CASO NAO INTERPRETE OS DADOS, RESPONDA "NÃO INTERPRETEI OS DADOS"
+    Esses dados sao dados de declaração de dados fiscais e contabeis à receita federal do brasil;
+    Com base nessas informações responda essas perguntas relacionadas ao SPED:
+
+    {{question}}
+
+    Retorne uma analise geral da sua interpretação dos dados e colunas para validação.
+
+    {{NOTA}}
+    """
+
+    invoices_rows = ''
+    for index, row in df.iterrows():
+        invoices_rows += f"ID: {row['id']}, Valor: {row['value']}, Fornecedor: {row['fornecedor']}\n"
+        
+    PROMPT_TEMPLATE = ChatPromptTemplate(
+        [
+            ("system", prompt),
+            ("human", "{input}"),
+            ("human", "{question}"),
+        ]
+    )
+
+
+    chain = PROMPT_TEMPLATE | llm | output_parser
+
+    r = chain.invoke({"input": invoices_rows, 'question': question})
+    return r
+
+# Função para converter TXT para Excel com estrutura SPED
+def convert_to_excel(filename, include_formula):
+    with open(filename, 'r', encoding='utf-8', errors='ignore') as file:
+        txt_content = file.read()
+
+    lines = txt_content.splitlines()
+    sheets_data = {}
+    
+    for line_num, line in enumerate(lines, start=1):
+        if line.startswith("|"):
+            row = line.strip().split("|")
+            sheet_name = row[1]
+            if sheet_name not in sheets_data:
+                sheets_data[sheet_name] = []
+            sheets_data[sheet_name].append(row)
+            row[0] = line_num
+
+    excel_filename = filename[:-4] + "_v1.xlsx"
+    writer = pd.ExcelWriter(excel_filename, engine='xlsxwriter')
+
+    for sheet_name, data in sheets_data.items():
+        header = ["ID", "REG"] + [f"{num:02d}" for num in range(2, len(data[0]) - 1)] + ["REGPAI"]
+        df = pd.DataFrame(data, columns=header)
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        
+        # Se a opção de incluir fórmula estiver ativa, adicionar a fórmula
+        if include_formula:
+            for row_num in range(1, len(df) + 1):
+                col = len(header) - 1
+                formula = f'=_xlfn.HSTACK(' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),1,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),1,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),1,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),2,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),2,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),2,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),3,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),3,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),3,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),4,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),4,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),4,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),5,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),5,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),5,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),6,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),6,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),6,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),7,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),7,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),7,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),8,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),8,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),8,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),9,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),9,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),9,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),10,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),10,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),10,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),11,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),11,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),11,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),12,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),12,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),12,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""),' \
+                      f'IFERROR(_xlfn.XLOOKUP($A{row_num+1},INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),13,1)&"\'!$A$1:$A$1000"),INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),13,1)&"\'!$A$1:$"&SUBSTITUTE(SUBSTITUTE(ADDRESS(2,MATCH(TRUE,INDEX(_xlfn.ISFORMULA(INDIRECT("\'"&INDEX(_xlfn._xlws.SORT(_xlfn._xlws.FILTER(\'9900\'!$C$2:$C$200,(LEFT($B$2)=LEFT(\'9900\'!$C$2:$C$200))*($B$2>\'9900\'!$C$2:$C$200)),,-1),13,1)&"\'!$A$2:$ZZ$2")),0),0)-1),"$",""),2,"")&"$1000"),,-1),""))'
+                worksheet = writer.sheets[sheet_name]
+                worksheet.write_formula(row_num, col, formula)
+
+    writer.close()
+    return excel_filename
+
+# Função para converter Excel para TXT
+def convert_to_txt(filename):
+    xls = pd.ExcelFile(filename)
+    txt_filename = filename[:-5] + ".txt"
+    rows = []
+
+    for sheet_name in xls.sheet_names:
+        df = xls.parse(sheet_name, dtype=str).fillna('')
+        rows.extend(df.values.tolist())
+
+    sorted_rows = sorted(rows, key=lambda x: (x[0].zfill(10), x[0]))
+    
+    with open(txt_filename, 'w', encoding='ISO-8859-1') as txt_file:
+        for row in sorted_rows:
+            txt_file.write("|" + "|".join(str(cell) for cell in row[1:-2]) + "|\n")
+
+    return txt_filename
+
+# # Função de Q&A com tratamento SPED
+# def responder_pergunta(pergunta, arquivo):
+#     # Criar arquivo temporário
+#     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
+#         tmp_file.write(arquivo)
+#         tmp_path = tmp_file.name
+    
+#     try:
+#         df = pd.read_excel(tmp_path, engine='openpyxl')
+        
+#         # Verificar e mapear colunas SPED
+#         colunas_sped = {
+#             'C100': ['VL_OPERACAO', 'CNPJ', 'DT_DOC'],
+#             'C170': ['VL_ITEM', 'CFOP']
+#         }
+        
+#         # Usar primeira coluna REG encontrada ou padrão
+#         reg_column = df.columns[df.columns.str.startswith('REG')][0] if any(df.columns.str.startswith('REG')) else 'C100'
+#         contexto_colunas = colunas_sped.get(reg_column, [])
+        
+#         contexto = " | ".join([f"{col}:{df[col].tolist()}" for col in contexto_colunas if col in df.columns])
+        
+#         if not contexto:
+#             return "Não encontrei dados relevantes para responder à pergunta."
+        
+#         resposta = qa_pipeline(question=pergunta, context=contexto, max_seq_len=384)
+        
+#         # Gerar tabelas dinâmicas
+#         if any(palavra in pergunta.lower() for palavra in ["maior", "quantas", "fornecedor"]):
+#             coluna_resposta = resposta['answer'].split(':')[0].strip()
+            
+#             if coluna_resposta in df.columns:
+#                 if "maior valor" in pergunta.lower():
+#                     tabela = df.loc[df[coluna_resposta].idxmax()][['NUM_DOC', coluna_resposta]]
+#                 elif "fornecedor" in pergunta.lower():
+#                     tabela = df.groupby('CNPJ').size().reset_index(name='Total NFs')
+#                 else:
+#                     tabela = df[coluna_resposta].value_counts().reset_index()
+                
+#                 return f"{resposta['answer']}\n{tabela.to_markdown(index=False)}"
+        
+#         return resposta['answer']
+    
+#     except Exception as e:
+#         return f"Erro ao processar o arquivo: {str(e)}"
+#     finally:
+#         os.unlink(tmp_path)  # Remover arquivo temporário
+
+
+
+# Interface Gradio otimizada
+def create_gradio_interface():
+    with gr.Blocks() as demo:
+        gr.Markdown("# SPED Analytics 📊")
+        
+        with gr.Tab("Conversor TXT→Excel"):
+            gr.Markdown("### Converter arquivo SPED TXT para Excel")
+            txt_input = gr.File(label="Arquivo TXT")
+            chk_formula = gr.Checkbox(label="Incluir fórmulas de validação RFB")
+            txt_button = gr.Button("Converter ▶️")
+            txt_output = gr.File(label="Excel Gerado")
+            txt_button.click(convert_to_excel, inputs=[txt_input, chk_formula], outputs=txt_output)
+        
+        with gr.Tab("Conversor Excel→TXT"):
+            gr.Markdown("### Exportar para formato SPED oficial")
+            excel_input = gr.File(label="Arquivo Excel")
+            excel_button = gr.Button("Converter ▶️")
+            excel_output = gr.File(label="TXT Gerado")
+            excel_button.click(convert_to_txt, inputs=excel_input, outputs=excel_output)
+        
+        with gr.Tab("💡Análise Inteligente"):
+            gr.Markdown("### Faça perguntas sobre os dados")
+            file_input = gr.File(label="Carregue o Excel", type="binary")
+            pergunta_input = gr.Textbox(label="Sua pergunta:", placeholder="Ex: Qual NF tem o maior valor?")
+            resposta_output = gr.Markdown(label="Resposta:")
+            pergunta_input.submit(generate_response, inputs=[pergunta_input, file_input], outputs=resposta_output)
+    
+    return demo
+
+if __name__ == "__main__":
+    demo = create_gradio_interface()
+    demo.launch(server_port=7860, share=False)
