@@ -1,29 +1,52 @@
-# Conversor SPED-Excel
+# Python RPA SPED-Excel & Analytics IA
 
-## Descrição
-Este é um programa com interface gráfica desenvolvido para facilitar a conversão de arquivos SPED (.txt) para o formato Excel (.xlsx) e vice-versa. Ele permite organizar os dados do SPED em planilhas, além de incluir fórmulas personalizadas no arquivo Excel resultante.
+Este projeto facilita a conversão de arquivos SPED (.txt) para Excel (.xlsx) e vice-versa, além de incluir uma **versão experimental com análise inteligente via IA** para perguntas sobre os dados fiscais.
 
 ## Funcionalidades
-- **Converter SPED para Excel:** Transforma arquivos SPED em formato .txt para planilhas Excel, criando uma aba para cada seção de dados do SPED.
-- **Converter Excel para SPED:** Reverte o processo, convertendo planilhas Excel no formato esperado de arquivos SPED.
-- **Abrir arquivos automaticamente após a conversão.**
-- **Incluir fórmulas no Excel gerado, se desejado.**
-- **Data limite de uso:** Verifique com o desenvolvedor
 
-## Requisitos
-- Python 3.x
-- tkinter
-- xlsxwriter
-- openpyxl
+- **Conversor SPED para Excel:**  
+  Organiza os dados do SPED em planilhas Excel, separando cada tipo de registro em uma aba.
+- **Conversor Excel para SPED:**  
+  Reverte o processo, gerando o TXT oficial a partir do Excel.
+- **Fórmulas de validação:**  
+  Opcionalmente, insere fórmulas de validação RFB no Excel gerado.
+- **Análise Inteligente (Experimental):**  
+  Permite fazer perguntas em linguagem natural sobre os dados fiscais, utilizando modelos de IA (LLM).
+- **Interface gráfica:**  
+  Disponível em Tkinter (desktop) e Gradio (web).
 
 ## Como usar
-1. Execute o arquivo Python para abrir a interface gráfica.
-2. Selecione o arquivo que deseja converter (SPED ou Excel).
-3. Escolha as opções de conversão:
-   - Converter SPED para Excel.
-   - Converter Excel para SPED.
-4. Se desejar, habilite as opções para abrir o arquivo automaticamente e incluir fórmulas.
-5. A conversão será processada e, após a conclusão, o arquivo será salvo.
 
-## Autor
-Renato - EY, 2022
+1. **Instale os requisitos:**
+   ```bash
+   pip install -r requirements.txt
+
+2. **Execute a interface desejada:**
+
+- **Tkinter:**
+   python sped_txt_to_excel.py
+
+- **Gradio (web):**
+   python renato.py
+
+   Acesse http://127.0.0.1:7860 no navegador.
+
+3. **Escolha a funcionalidade:**
+
+- **Converter TXT para Excel**
+- **Converter Excel para TXT**
+- **Fazer perguntas inteligentes sobre os dados (experimental)**
+
+**Versão Experimental com IA**
+- **A pasta experimental contém o módulo Experimental_Chat-AI.py, que integra análise inteligente via IA (LLM) aos dados SPED.**
+⚠️ Esta funcionalidade está em desenvolvimento e pode apresentar resultados variados.
+
+- **Exemplo de uso da análise inteligente**
+   Faça upload do Excel gerado.
+   Digite perguntas como:
+   "Qual nota fiscal tem o maior valor?"
+   "Quantos fornecedores diferentes existem?"
+   "Liste os valores das notas do fornecedor X."
+
+**Autor**
+Renato - 2022-2025
