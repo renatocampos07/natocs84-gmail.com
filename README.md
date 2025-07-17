@@ -27,7 +27,7 @@ Este projeto facilita a conversão de arquivos SPED (.txt) para Excel (.xlsx) e 
    python sped_txt_to_excel.py
 
 - **Gradio (web):**
-   python renato.py
+   python Experimental_Chat-AI.py
 
    Acesse http://127.0.0.1:7860 no navegador.
 
